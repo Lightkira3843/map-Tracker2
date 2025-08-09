@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Map View</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css">
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.css">
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.Default.css">
+<style>
+  body, html { margin: 0; height: 100%; }
+  #controls { padding: 8px; background: #fff; border-bottom: 1px solid #ccc; font-family: Arial; }
+  #map { height: calc(100% - 50px); }
+</style>
+</head>
+<body>
+<div id="controls">
+  File: <span id="fileInfo"></span> |
+  Start: <input type="datetime-local" id="startDateTime">
+  End: <input type="datetime-local" id="endDateTime">
+  <button onclick="filterMap()">Check</button>
+</div>
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.markercluster/dist/leaflet.markercluster.js"></script>
+<script>
+let map, allData = [], threshold, markerCluster;
+
+function parseLogDateTime(dateStr, timeStr) {
+  const [day, month, year] = dateStr.split('/').map(Number);
+  const [hour, min, sec] = timeStr.split(':').map(Number);
+  return new Date(year, month - 1, day, hour, min, sec);
+}
+
+function parseInputDateTime(value) {
+  if (!value) return null;
+  const [datePart, timePart] = value.split('T');
+  const [year, month, day] = datePart.split('-').map(Number);
+  const [hour, min] = timePart.split(':').map(Number);
+  return new Date(year, month - 1, day, hour, min);
+}
+
+function initMap() {
+  allData = JSON.parse(sessionStorage.getItem('gpsData') || '[]');
+  threshold = parseFloat(sessionStorage.getItem('threshold'));
+  document.getElementById('fileInfo').textContent = sessionStorage.getItem('fileName') || '';
+  if (!allData.length) return;
+
+  // Base layers
+  const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors',
+    maxZoom: 19
+  });
+
+  const esriSatLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/' +
+    'World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+    attribution: 'Tiles &copy; Esri',
+    maxZoom: 19
+  });
+
+  const cartoLightLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; <a href="https://carto.com/">CARTO</a>',
+    subdomains: 'abcd',
+    maxZoom: 19
+  });
+
+  // Init map
+  map = L.map('map', {
+    center: [allData[0].lat, allData[0].lng],
+    zoom: 15,
+    layers: [osmLayer]
+  });
+
+  // Layer control
+  L.control.layers(
+    {
+      "OpenStreetMap": osmLayer,
+      "Esri Satellite": esriSatLayer,
+      "Carto Light": cartoLightLayer
+    }
+  ).addTo(map);
+
+  markerCluster = L.markerClusterGroup();
+  plotMarkers(allData);
+}
+
+function plotMarkers(data) {
+  markerCluster.clearLayers();
+  data.forEach(p => {
+    const color = p.speed <= threshold ? 'green' : 'red';
+    const marker = L.circleMarker([p.lat, p.lng], {
+      radius: 5,
+      color: color,
+      fillColor: color,
+      fillOpacity: 1
+    }).bindPopup(
+      `<b>Date:</b> ${p.date}<br><b>Time:</b> ${p.time}<br><b>Lat:</b> ${p.lat}<br><b>Lng:</b> ${p.lng}<br><b>Speed:</b> ${p.speed}`
+    );
+    markerCluster.addLayer(marker);
+  });
+  map.addLayer(markerCluster);
+  if (data.length > 0) {
+    const groupBounds = markerCluster.getBounds();
+    map.fitBounds(groupBounds, { padding: [20, 20] });
+  }
+}
+
+function filterMap() {
+  const startObj = parseInputDateTime(document.getElementById('startDateTime').value);
+  const endObj = parseInputDateTime(document.getElementById('endDateTime').value);
+  const filtered = allData.filter(p => {
+    const logDate = parseLogDateTime(p.date, p.time);
+    if (startObj && logDate < startObj) return false;
+    if (endObj && logDate > endObj) return false;
+    return true;
+  });
+  plotMarkers(filtered);
+}
+
+initMap();
+</script>
+</body>
+</html>

@@ -27,7 +27,7 @@
 <button onclick="analyze()">Analyze</button>
 <div id="error"></div>
 
-<!-- PDF.js -->
+<!-- PDF.js from CDN (only needed if you upload PDFs) -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.14.305/pdf.min.js"></script>
 <script>
 function parseLogDateTime(dateStr, timeStr) {
@@ -57,55 +57,89 @@ async function readPDF(file) {
 }
 
 async function analyze() {
-  const file = document.getElementById('fileInput').files[0];
-  const speedLimit = parseFloat(document.getElementById('speedLimit').value);
-  const startDateTime = document.getElementById('startDateTime').value;
-  const endDateTime = document.getElementById('endDateTime').value;
   const errorDiv = document.getElementById('error');
   errorDiv.textContent = '';
 
-  if (!file) {
-    errorDiv.textContent = 'Please upload a .txt or .pdf file.';
-    return;
+  try {
+    const file = document.getElementById('fileInput').files[0];
+    const speedLimit = parseFloat(document.getElementById('speedLimit').value);
+    const startDateTime = document.getElementById('startDateTime').value;
+    const endDateTime = document.getElementById('endDateTime').value;
+
+    if (!file) {
+      errorDiv.textContent = 'Please upload a .txt or .pdf file.';
+      return;
+    }
+    if (isNaN(speedLimit)) {
+      errorDiv.textContent = 'Please enter a valid speed limit.';
+      return;
+    }
+
+    let content = '';
+    if (file.name.toLowerCase().endsWith('.pdf')) {
+      content = await readPDF(file);
+    } else {
+      content = await file.text();
+    }
+
+    // Remove possible UTF-8 BOM
+    content = content.replace(/^\uFEFF/, '');
+
+    const startObj = parseInputDateTime(startDateTime);
+    const endObj = parseInputDateTime(endDateTime);
+    const validData = [];
+
+    // Handle CRLF, LF, or CR line endings
+    const lines = content.split(/\r\n|\n|\r/);
+
+    // Required format:
+    //  DD/MM/YYYY,HH:MM:SS,lat,lng,speed
+    const regex = /^\s*(\d{2}\/\d{2}\/\d{4})\s*,\s*(\d{2}:\d{2}:\d{2})\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/;
+
+    for (let rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line) continue;
+
+      const match = line.match(regex);
+      if (!match) continue;
+
+      const date = match[1];
+      const time = match[2];
+      const latF = parseFloat(match[3]);
+      const lngF = parseFloat(match[4]);
+      const speedF = parseFloat(match[5]);
+
+      if (
+        !isFinite(latF) || !isFinite(lngF) || !isFinite(speedF) ||
+        Math.abs(latF) > 90 || Math.abs(lngF) > 180
+      ) {
+        continue;
+      }
+
+      const logDate = parseLogDateTime(date, time);
+      if (isNaN(logDate.getTime())) continue;
+
+      if (startObj && logDate < startObj) continue;
+      if (endObj && logDate > endObj) continue;
+
+      validData.push({ date, time, lat: latF, lng: lngF, speed: speedF });
+    }
+
+    if (validData.length === 0) {
+      errorDiv.textContent = 'No valid data found for given filter or format.';
+      return;
+    }
+
+    sessionStorage.setItem('gpsData', JSON.stringify(validData));
+    sessionStorage.setItem('threshold', speedLimit.toString());
+    sessionStorage.setItem('fileName', file.name);
+
+    // Redirect to map
+    window.location.href = 'map.html';
+  } catch (e) {
+    console.error(e);
+    errorDiv.textContent = 'Unexpected error: ' + e.message;
   }
-  if (isNaN(speedLimit)) {
-    errorDiv.textContent = 'Please enter a valid speed limit.';
-    return;
-  }
-
-  let content = '';
-  if (file.name.toLowerCase().endsWith('.pdf')) {
-    content = await readPDF(file);
-  } else {
-    content = await file.text();
-  }
-
-  const startObj = parseInputDateTime(startDateTime);
-  const endObj = parseInputDateTime(endDateTime);
-  const validData = [];
-  const lines = content.split(/\r?\n/);
-
-  const regex = /^\d{2}\/\d{2}\/\d{4},\d{2}:\d{2}:\d{2},-?\d+\.\d+,-?\d+\.\d+,-?\d+(\.\d+)?$/;
-
-  for (const line of lines) {
-    if (!regex.test(line.trim())) continue;
-    const [date, time, lat, lng, speed] = line.split(',').map(s => s.trim());
-    const latF = parseFloat(lat), lngF = parseFloat(lng), speedF = parseFloat(speed);
-    const logDate = parseLogDateTime(date, time);
-    if (startObj && logDate < startObj) continue;
-    if (endObj && logDate > endObj) continue;
-    validData.push({ date, time, lat: latF, lng: lngF, speed: speedF });
-  }
-
-  if (validData.length === 0) {
-    errorDiv.textContent = 'No valid data found for given filter.';
-    return;
-  }
-
-  sessionStorage.setItem('gpsData', JSON.stringify(validData));
-  sessionStorage.setItem('threshold', speedLimit);
-  sessionStorage.setItem('fileName', file.name);
-  window.location.href = 'map.html';
 }
 </script>
 </body>

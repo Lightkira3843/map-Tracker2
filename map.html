@@ -3,13 +3,28 @@
 <head>
 <meta charset="UTF-8">
 <title>Map View</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css">
-<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.css">
-<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.Default.css">
+
+<!-- ONLINE Leaflet + MarkerCluster -->
+<link
+  rel="stylesheet"
+  href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+/>
+<link
+  rel="stylesheet"
+  href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"
+/>
+<link
+  rel="stylesheet"
+  href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"
+/>
+
 <style>
   body, html { margin: 0; height: 100%; }
   #controls { padding: 8px; background: #fff; border-bottom: 1px solid #ccc; font-family: Arial; }
-  #map { height: calc(100% - 50px); }
+  #map { height: calc(100% - 60px); }
+  #controls label { margin-right: 8px; }
+  #controls input[type="datetime-local"] { margin-right: 8px; }
+  #controls input[type="number"] { width: 90px; margin-right: 8px; }
 </style>
 </head>
 <body>
@@ -17,12 +32,16 @@
   File: <span id="fileInfo"></span> |
   Start: <input type="datetime-local" id="startDateTime">
   End: <input type="datetime-local" id="endDateTime">
-  <button onclick="filterMap()">Check</button>
+  Speed limit: <input type="number" id="speedLimit" step="0.01">
+  <label><input type="checkbox" id="showOnlyRed"> Show only red points</label>
+  <button onclick="filterMap()">Apply</button>
 </div>
 <div id="map"></div>
 
-<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-<script src="https://unpkg.com/leaflet.markercluster/dist/leaflet.markercluster.js"></script>
+<!-- JS libraries -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+
 <script>
 let map, allData = [], threshold, markerCluster;
 
@@ -40,38 +59,73 @@ function parseInputDateTime(value) {
   return new Date(year, month - 1, day, hour, min);
 }
 
+// Standalone popup that stays until user closes it (not bound to marker)
+function createPersistentPopup(pointData, latlng) {
+  const popupHtml =
+    `<b>Date:</b> ${pointData.date}<br>` +
+    `<b>Time:</b> ${pointData.time}<br>` +
+    `<b>Lat:</b> ${pointData.lat}<br>` +
+    `<b>Lng:</b> ${pointData.lng}<br>` +
+    `<b>Speed:</b> ${pointData.speed}`;
+
+  L.popup({
+    autoClose: false,
+    closeOnClick: false
+  })
+    .setLatLng(latlng)
+    .setContent(popupHtml)
+    .addTo(map); // stays until X is clicked
+}
+
 function initMap() {
   allData = JSON.parse(sessionStorage.getItem('gpsData') || '[]');
   threshold = parseFloat(sessionStorage.getItem('threshold'));
   document.getElementById('fileInfo').textContent = sessionStorage.getItem('fileName') || '';
-  if (!allData.length) return;
 
-  // Base layers
+  if (!allData.length) {
+    alert('No GPS data found. Please go back and upload a log.');
+    return;
+  }
+
+  if (!isNaN(threshold)) {
+    document.getElementById('speedLimit').value = threshold;
+  }
+
+  // Basemaps – high maxZoom for detail
   const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '&copy; OpenStreetMap contributors',
-    maxZoom: 19
+    maxZoom: 22
   });
 
-  const esriSatLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/' +
-    'World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-    attribution: 'Tiles &copy; Esri',
-    maxZoom: 19
-  });
+  const esriSatLayer = L.tileLayer(
+    'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    {
+      attribution: 'Tiles &copy; Esri',
+      maxZoom: 22
+    }
+  );
 
-  const cartoLightLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-    attribution: '&copy; <a href="https://carto.com/">CARTO</a>',
-    subdomains: 'abcd',
-    maxZoom: 19
-  });
+  const cartoLightLayer = L.tileLayer(
+    'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+    {
+      attribution: '&copy; <a href="https://carto.com/">CARTO</a>',
+      subdomains: 'abcd',
+      maxZoom: 22
+    }
+  );
 
-  // Init map
   map = L.map('map', {
     center: [allData[0].lat, allData[0].lng],
     zoom: 15,
-    layers: [osmLayer]
+    maxZoom: 22,
+    layers: [osmLayer],
+    closePopupOnClick: false
   });
 
-  // Layer control
+  // IMPORTANT: don't zoom map on double-click,
+  // so your dbl-click on clusters is used for spiderfy instead.
+  map.doubleClickZoom.disable();
+
   L.control.layers(
     {
       "OpenStreetMap": osmLayer,
@@ -80,40 +134,85 @@ function initMap() {
     }
   ).addTo(map);
 
-  markerCluster = L.markerClusterGroup();
+  // Cluster config:
+  // - single click: spiderfy
+  // - double click: we will also spiderfy (explicit handler below)
+  markerCluster = L.markerClusterGroup({
+    spiderfyOnEveryClick: true,
+    zoomToBoundsOnClick: false,
+    showCoverageOnHover: false,
+    maxClusterRadius: 40
+  });
+
+  // When you double-click a cluster circle number, spiderfy that cluster
+  markerCluster.on('clusterdblclick', function (e) {
+    e.layer.spiderfy();
+  });
+
   plotMarkers(allData);
 }
 
 function plotMarkers(data) {
   markerCluster.clearLayers();
+
   data.forEach(p => {
-    const color = p.speed <= threshold ? 'green' : 'red';
+    const color = (p.speed <= threshold) ? 'green' : 'red';
+
     const marker = L.circleMarker([p.lat, p.lng], {
       radius: 5,
       color: color,
       fillColor: color,
       fillOpacity: 1
-    }).bindPopup(
-      `<b>Date:</b> ${p.date}<br><b>Time:</b> ${p.time}<br><b>Lat:</b> ${p.lat}<br><b>Lng:</b> ${p.lng}<br><b>Speed:</b> ${p.speed}`
-    );
+    });
+
+    // On click: open persistent popup at this point
+    marker.on('click', function () {
+      createPersistentPopup(p, marker.getLatLng());
+    });
+
     markerCluster.addLayer(marker);
   });
+
   map.addLayer(markerCluster);
+
   if (data.length > 0) {
     const groupBounds = markerCluster.getBounds();
-    map.fitBounds(groupBounds, { padding: [20, 20] });
+    if (groupBounds.isValid()) {
+      map.fitBounds(groupBounds, { padding: [20, 20] });
+    }
   }
 }
 
 function filterMap() {
-  const startObj = parseInputDateTime(document.getElementById('startDateTime').value);
-  const endObj = parseInputDateTime(document.getElementById('endDateTime').value);
+  if (!allData.length) return;
+
+  const startValue = document.getElementById('startDateTime').value;
+  const endValue = document.getElementById('endDateTime').value;
+  const startObj = parseInputDateTime(startValue);
+  const endObj = parseInputDateTime(endValue);
+
+  const speedLimitInput = document.getElementById('speedLimit').value;
+  if (speedLimitInput !== '') {
+    const newThreshold = parseFloat(speedLimitInput);
+    if (!isNaN(newThreshold)) {
+      threshold = newThreshold;
+      sessionStorage.setItem('threshold', threshold.toString());
+    }
+  }
+
+  const showOnlyRed = document.getElementById('showOnlyRed').checked;
+
   const filtered = allData.filter(p => {
     const logDate = parseLogDateTime(p.date, p.time);
+
     if (startObj && logDate < startObj) return false;
     if (endObj && logDate > endObj) return false;
+
+    if (showOnlyRed && !(p.speed > threshold)) return false;
+
     return true;
   });
+
   plotMarkers(filtered);
 }
 

@@ -9,19 +9,30 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"/>
 
 <style>
-body, html { margin:0; height:100%; font-family: Arial; }
+body, html { margin:0; height:100%; font-family: Arial, sans-serif; }
 #controls { padding:8px; background:#fff; border-bottom:1px solid #ccc; }
 #container { display:flex; height:calc(100% - 50px); }
 #map { flex:1; }
 #graphPanel {
-  width:360px;
+  width:420px;
   background:#f8f9fa;
   border-left:1px solid #ccc;
   padding:10px;
   display:none;
   overflow-y:auto;
 }
-canvas { width:100%; margin-bottom:20px; }
+canvas { width:100%; margin-bottom:25px; }
+#pointList {
+  max-height:220px;
+  overflow-y:auto;
+  background:#fff;
+  border:1px solid #ccc;
+  padding:6px;
+  font-size:13px;
+}
+.point-item { cursor:pointer; padding:4px; border-bottom:1px solid #eee; }
+.point-item:hover { background:#f1f1f1; }
+button { margin-right:6px; }
 </style>
 </head>
 <body>
@@ -40,10 +51,17 @@ canvas { width:100%; margin-bottom:20px; }
   <div id="map"></div>
   <div id="graphPanel">
     <h3>Trip Analytics</h3>
-    <canvas id="gSpeedTime"></canvas>
-    <canvas id="gSpeedHist"></canvas>
-    <canvas id="gDistance"></canvas>
-    <canvas id="gSpeedLimit"></canvas>
+    <div style="margin-bottom:10px;">
+      <button onclick="setChartType('bar')">Bar</button>
+      <button onclick="setChartType('pie')">Pie</button>
+    </div>
+
+    <canvas id="chart1"></canvas>
+    <canvas id="chart2"></canvas>
+    <canvas id="chart3"></canvas>
+
+    <h4>Selected Points</h4>
+    <div id="pointList"><i>Click a bar or pie slice to list points</i></div>
   </div>
 </div>
 
@@ -52,87 +70,165 @@ canvas { width:100%; margin-bottom:20px; }
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
 <script>
-let map, allData=[], threshold, markerCluster, charts=[];
+let map, allData=[], threshold, markerCluster;
+let charts=[], currentChartType='bar';
+let markerMap=[];
 
+/* ----------------- Date helpers ----------------- */
 function parseLogDateTime(d,t){const[a,b,c]=d.split('/').map(Number);const[h,m,s]=t.split(':').map(Number);return new Date(c,b-1,a,h,m,s);} 
 function parseInputDateTime(v){if(!v) return null;const[d,t]=v.split('T');const[y,m,da]=d.split('-').map(Number);const[h,mi]=t.split(':').map(Number);return new Date(y,m-1,da,h,mi);} 
 
+/* ----------------- UI toggles ----------------- */
 function toggleGraphs(){
- const p=document.getElementById('graphPanel');
- p.style.display=p.style.display==='none'?'block':'none';
- if(p.style.display==='block') renderGraphs();
+  const p=document.getElementById('graphPanel');
+  p.style.display=p.style.display==='none'?'block':'none';
+  if(p.style.display==='block') renderGraphs();
 }
+function setChartType(t){ currentChartType=t; renderGraphs(); }
 
+/* ----------------- Map init ----------------- */
 function initMap(){
- allData=JSON.parse(sessionStorage.getItem('gpsData')||'[]');
- threshold=parseFloat(sessionStorage.getItem('threshold'));
- document.getElementById('fileInfo').textContent=sessionStorage.getItem('fileName')||'';
+  allData=JSON.parse(sessionStorage.getItem('gpsData')||'[]');
+  threshold=parseFloat(sessionStorage.getItem('threshold'));
+  document.getElementById('fileInfo').textContent=sessionStorage.getItem('fileName')||'';
 
- const osm=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:22});
- map=L.map('map',{center:[allData[0].lat,allData[0].lng],zoom:15,layers:[osm],closePopupOnClick:false});
- map.doubleClickZoom.disable();
+  const osm=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:22});
+  map=L.map('map',{center:[allData[0].lat,allData[0].lng],zoom:15,layers:[osm],closePopupOnClick:false});
+  map.doubleClickZoom.disable();
 
- markerCluster=L.markerClusterGroup({
-   spiderfyOnEveryClick:true,
-   zoomToBoundsOnClick:false,
-   showCoverageOnHover:false,
-   maxClusterRadius:40
- });
+  markerCluster=L.markerClusterGroup({
+    spiderfyOnEveryClick:true,
+    zoomToBoundsOnClick:false,
+    showCoverageOnHover:false,
+    maxClusterRadius:40
+  });
 
- markerCluster.on('clusterdblclick',e=>e.layer.spiderfy());
- plotMarkers(allData);
+  markerCluster.on('clusterdblclick',e=>e.layer.spiderfy());
+  plotMarkers(allData);
 }
 
+/* ----------------- Plot markers ----------------- */
 function plotMarkers(data){
- markerCluster.clearLayers();
- data.forEach(p=>{
-   const color=(p.speed<=threshold)?'green':'red';
-   const m=L.circleMarker([p.lat,p.lng],{radius:5,color,fillColor:color,fillOpacity:1});
-   m.on('click',()=>{
-     L.popup({autoClose:false,closeOnClick:false})
-      .setLatLng(m.getLatLng())
-      .setContent(`<b>Date:</b> ${p.date}<br><b>Time:</b> ${p.time}<br><b>Speed:</b> ${p.speed}`)
-      .addTo(map);
-   });
-   markerCluster.addLayer(m);
- });
- map.addLayer(markerCluster);
+  markerCluster.clearLayers();
+  markerMap=[];
+
+  data.forEach((p,i)=>{
+    const color=(p.speed<=threshold)?'green':'red';
+    const m=L.circleMarker([p.lat,p.lng],{radius:5,color,fillColor:color,fillOpacity:1});
+
+    // Direct marker click → show persistent popup ONLY
+    m.on('click',()=>{
+      L.popup({autoClose:false,closeOnClick:false})
+        .setLatLng(m.getLatLng())
+        .setContent(`
+          <b>Date:</b> ${p.date}<br>
+          <b>Time:</b> ${p.time}<br>
+          <b>Latitude:</b> ${p.lat}<br>
+          <b>Longitude:</b> ${p.lng}<br>
+          <b>Speed:</b> ${p.speed}
+        `)
+        .addTo(map);
+    });
+
+    markerCluster.addLayer(m);
+    markerMap[i]=m;
+  });
+
+  map.addLayer(markerCluster);
 }
 
+/* ----------------- Filtering ----------------- */
 function filterMap(){
- const s=parseInputDateTime(startDateTime.value);
- const e=parseInputDateTime(endDateTime.value);
- const showRed=showOnlyRed.checked;
- const sp=parseFloat(speedLimit.value);
- if(!isNaN(sp)) threshold=sp;
- const filtered=allData.filter(p=>{
-   const d=parseLogDateTime(p.date,p.time);
-   if(s && d<s) return false;
-   if(e && d>e) return false;
-   if(showRed && !(p.speed>threshold)) return false;
-   return true;
- });
- plotMarkers(filtered);
+  const s=parseInputDateTime(startDateTime.value);
+  const e=parseInputDateTime(endDateTime.value);
+  const showRed=showOnlyRed.checked;
+  const sp=parseFloat(speedLimit.value);
+  if(!isNaN(sp)) threshold=sp;
+
+  const filtered=allData.filter(p=>{
+    const d=parseLogDateTime(p.date,p.time);
+    if(s && d<s) return false;
+    if(e && d>e) return false;
+    if(showRed && !(p.speed>threshold)) return false;
+    return true;
+  });
+
+  plotMarkers(filtered);
 }
 
+/* ----------------- Charts ----------------- */
 function renderGraphs(){
- charts.forEach(c=>c.destroy()); charts=[];
- const labels=allData.map((_,i)=>i+1);
- const speeds=allData.map(d=>d.speed);
+  charts.forEach(c=>c.destroy()); charts=[];
+  document.getElementById('pointList').innerHTML='<i>Click a bar or pie slice to list points</i>';
 
- charts.push(new Chart(gSpeedTime,{type:'line',data:{labels,datasets:[{label:'Speed vs Time',data:speeds,tension:0.3}]}}));
+  /* Chart 1: Compliance */
+  let green=[], red=[];
+  allData.forEach((p,i)=>p.speed<=threshold?green.push(i):red.push(i));
 
- charts.push(new Chart(gSpeedHist,{type:'bar',data:{labels:speeds.map(s=>s.toFixed(1)),datasets:[{label:'Speed Distribution',data:speeds}]}}));
+  charts.push(new Chart(chart1,{
+    type:currentChartType,
+    data:{labels:['Within Limit','Overspeed'],datasets:[{data:[green.length,red.length],backgroundColor:['green','red']} ]},
+    options:{onClick:(e,el)=>{if(!el.length) return; showPointList(el[0].index===0?green:red);}}
+  }));
 
- let dist=[0];
- for(let i=1;i<allData.length;i++){
-   const dx=allData[i].lat-allData[i-1].lat;
-   const dy=allData[i].lng-allData[i-1].lng;
-   dist.push(dist[i-1]+Math.sqrt(dx*dx+dy*dy));
- }
- charts.push(new Chart(gDistance,{type:'line',data:{labels,datasets:[{label:'Cumulative Distance',data:dist}]}}));
+  /* Chart 2: Speed Zones */
+  const buckets={'0–10':[], '10–20':[], '20–30':[], '30+':[]};
+  allData.forEach((p,i)=>{
+    if(p.speed<10) buckets['0–10'].push(i);
+    else if(p.speed<20) buckets['10–20'].push(i);
+    else if(p.speed<30) buckets['20–30'].push(i);
+    else buckets['30+'].push(i);
+  });
 
- charts.push(new Chart(gSpeedLimit,{type:'line',data:{labels,datasets:[{label:'Speed vs Limit',data:speeds.map(s=>s-threshold)}]}}));
+  charts.push(new Chart(chart2,{
+    type:'bar',
+    data:{labels:Object.keys(buckets),datasets:[{label:'High-Speed Zones',data:Object.values(buckets).map(a=>a.length),backgroundColor:'#007bff'}]},
+    options:{onClick:(e,el)=>{if(!el.length) return; showPointList(buckets[Object.keys(buckets)[el[0].index]]);}}
+  }));
+
+  /* Chart 3: Driver Behaviour */
+  let steady=[], aggressive=[], braking=[];
+  for(let i=1;i<allData.length;i++){
+    const d=allData[i].speed-allData[i-1].speed;
+    if(Math.abs(d)<2) steady.push(i);
+    else if(d>3) aggressive.push(i);
+    else braking.push(i);
+  }
+
+  charts.push(new Chart(chart3,{
+    type:currentChartType,
+    data:{labels:['Steady','Aggressive Accel','Hard Braking'],datasets:[{data:[steady.length,aggressive.length,braking.length],backgroundColor:['#28a745','#ffc107','#dc3545']} ]},
+    options:{onClick:(e,el)=>{if(!el.length) return; showPointList([steady,aggressive,braking][el[0].index]);}}
+  }));
+}
+
+/* ----------------- Point list + highlight ----------------- */
+function showPointList(indexes){
+  const list=document.getElementById('pointList');
+  list.innerHTML='';
+  if(!indexes.length){ list.innerHTML='<i>No points</i>'; return; }
+
+  indexes.forEach(i=>{
+    const p=allData[i];
+    const d=document.createElement('div');
+    d.className='point-item';
+    d.innerHTML=`#${i} | ${p.date} ${p.time} | Speed: ${p.speed}`;
+    d.onclick=()=>highlightPoint(i);
+    list.appendChild(d);
+  });
+}
+
+function highlightPoint(i){
+  const m=markerMap[i]; if(!m) return;
+  map.setView(m.getLatLng(),18);
+
+  m.setStyle({radius:9,color:'yellow',fillColor:'orange'});
+
+  setTimeout(()=>{
+    const p=allData[i];
+    const c=(p.speed<=threshold)?'green':'red';
+    m.setStyle({radius:5,color:c,fillColor:c});
+  },1500);
 }
 
 initMap();

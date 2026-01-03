@@ -21,7 +21,7 @@ body, html { margin:0; height:100%; font-family: Arial, sans-serif; }
   display:none;
   overflow-y:auto;
 }
-canvas { width:100%; margin-bottom:25px; }
+canvas { width:100%; margin-bottom:30px; }
 #pointList {
   max-height:220px;
   overflow-y:auto;
@@ -49,6 +49,7 @@ button { margin-right:6px; }
 
 <div id="container">
   <div id="map"></div>
+
   <div id="graphPanel">
     <h3>Trip Analytics</h3>
     <div style="margin-bottom:10px;">
@@ -68,18 +69,29 @@ button { margin-right:6px; }
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script>
-Chart.defaults.locale = 'en-IN';
-</script>
 
 <script>
+Chart.defaults.locale = 'en-IN';
+
 let map, allData=[], threshold, markerCluster;
 let charts=[], currentChartType='bar';
 let markerMap=[];
 
-function parseLogDateTime(d,t){const[a,b,c]=d.split('/').map(Number);const[h,m,s]=t.split(':').map(Number);return new Date(c,b-1,a,h,m,s);} 
-function parseInputDateTime(v){if(!v) return null;const[d,t]=v.split('T');const[y,m,da]=d.split('-').map(Number);const[h,mi]=t.split(':').map(Number);return new Date(y,m-1,da,h,mi);} 
+/* ---------- Helpers ---------- */
+function parseLogDateTime(d,t){
+  const [day,month,year]=d.split('/').map(Number);
+  const [h,m,s]=t.split(':').map(Number);
+  return new Date(year,month-1,day,h,m,s);
+}
+function parseInputDateTime(v){
+  if(!v) return null;
+  const [d,t]=v.split('T');
+  const [y,m,da]=d.split('-').map(Number);
+  const [h,mi]=t.split(':').map(Number);
+  return new Date(y,m-1,da,h,mi);
+}
 
+/* ---------- UI ---------- */
 function toggleGraphs(){
   const p=document.getElementById('graphPanel');
   p.style.display=p.style.display==='none'?'block':'none';
@@ -87,37 +99,44 @@ function toggleGraphs(){
 }
 function setChartType(t){ currentChartType=t; renderGraphs(); }
 
+/* ---------- Map ---------- */
 function initMap(){
   allData=JSON.parse(sessionStorage.getItem('gpsData')||'[]');
   threshold=parseFloat(sessionStorage.getItem('threshold'));
   document.getElementById('fileInfo').textContent=sessionStorage.getItem('fileName')||'';
 
-  const esriTopo = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}', { maxZoom: 20, attribution: 'Tiles © Esri' });('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}', { maxZoom:22, attribution:'Tiles © Esri' });
-  const esriSat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 22, attribution: 'Tiles © Esri' });('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom:22, attribution:'Tiles © Esri' });
-  const cartoLight = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { maxZoom: 20, attribution: '© OpenStreetMap & CARTO' });('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { maxZoom:22, attribution:'© OpenStreetMap & CARTO' });
+  const streetMap=L.tileLayer(
+    'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+    {maxZoom:20, attribution:'© OpenStreetMap & CARTO'}
+  );
 
-  map = L.map('map', {
-    center: [allData[0].lat, allData[0].lng],
-    zoom: 15,
-    maxZoom: 20,
-    layers: [esriTopo],
-    closePopupOnClick: false
-  });('map', {
-    center: [allData[0].lat, allData[0].lng],
-    zoom: 15,
-    layers: [esriTopo],
-    closePopupOnClick: false
+  const satelliteMap=L.tileLayer(
+    'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    {maxZoom:22, attribution:'Tiles © Esri'}
+  );
+
+  const topoMap=L.tileLayer(
+    'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
+    {maxZoom:20, attribution:'Tiles © Esri'}
+  );
+
+  map=L.map('map',{
+    center:[allData[0].lat,allData[0].lng],
+    zoom:15,
+    maxZoom:20,
+    layers:[streetMap], // DEFAULT
+    closePopupOnClick:false
   });
 
   L.control.layers({
-    'Topographic (Detailed)': esriTopo,
-    'Satellite': esriSat,
-    'Clean Map': cartoLight
+    'Street View': streetMap,
+    'Satellite View': satelliteMap,
+    'Topographic View': topoMap
   }).addTo(map);
 
   map.doubleClickZoom.disable();
 
-  markerCluster = L.markerClusterGroup({
+  markerCluster=L.markerClusterGroup({
     spiderfyOnEveryClick:true,
     zoomToBoundsOnClick:false,
     showCoverageOnHover:false,
@@ -128,18 +147,27 @@ function initMap(){
   plotMarkers(allData);
 }
 
+/* ---------- Markers ---------- */
 function plotMarkers(data){
   markerCluster.clearLayers();
   markerMap=[];
 
   data.forEach((p,i)=>{
     const color=(p.speed<=threshold)?'green':'red';
-    const m=L.circleMarker([p.lat,p.lng],{radius:5,color,fillColor:color,fillOpacity:1});
+    const m=L.circleMarker([p.lat,p.lng],{
+      radius:5,color,fillColor:color,fillOpacity:1
+    });
 
     m.on('click',()=>{
       L.popup({autoClose:false,closeOnClick:false})
         .setLatLng(m.getLatLng())
-        .setContent(`<b>Date:</b> ${p.date}<br><b>Time:</b> ${p.time}<br><b>Latitude:</b> ${p.lat}<br><b>Longitude:</b> ${p.lng}<br><b>Speed:</b> ${p.speed}`)
+        .setContent(
+          `<b>Date:</b> ${p.date}<br>
+           <b>Time:</b> ${p.time}<br>
+           <b>Latitude:</b> ${p.lat}<br>
+           <b>Longitude:</b> ${p.lng}<br>
+           <b>Speed:</b> ${p.speed} km/h`
+        )
         .addTo(map);
     });
 
@@ -150,6 +178,7 @@ function plotMarkers(data){
   map.addLayer(markerCluster);
 }
 
+/* ---------- Filters ---------- */
 function filterMap(){
   const s=parseInputDateTime(startDateTime.value);
   const e=parseInputDateTime(endDateTime.value);
@@ -168,49 +197,112 @@ function filterMap(){
   plotMarkers(filtered);
 }
 
+/* ---------- Charts ---------- */
 function renderGraphs(){
-  charts.forEach(c=>c.destroy()); charts=[];
-  document.getElementById('pointList').innerHTML='<i>Click a bar or pie slice to list points</i>';
+  charts.forEach(c=>c.destroy());
+  charts=[];
+  pointList.innerHTML='<i>Click a bar or pie slice to list points</i>';
 
+  /* Graph 1: Speed Compliance */
   let green=[], red=[];
   allData.forEach((p,i)=>p.speed<=threshold?green.push(i):red.push(i));
 
-  charts.push(new Chart(chart1,{type:currentChartType,data:{labels:['Within Limit','Overspeed'],datasets:[{data:[green.length,red.length],backgroundColor:['green','red']} ]},options:{onClick:(e,el)=>{if(!el.length) return; showPointList(el[0].index===0?green:red);}}}));
+  charts.push(new Chart(chart1,{
+    type:currentChartType,
+    data:{
+      labels:['Within Speed Limit','Overspeed'],
+      datasets:[{
+        label:'Speed Compliance',
+        data:[green.length,red.length],
+        backgroundColor:['green','red']
+      }]
+    },
+    options:{
+      plugins:{title:{display:true,text:'Driver Speed Compliance Overview'}},
+      onClick:(e,el)=>el.length && showPointList(el[0].index===0?green:red)
+    }
+  }));
 
-  const buckets={'0–10':[], '10–20':[], '20–30':[], '30+':[]};
-  allData.forEach((p,i)=>{ if(p.speed<10) buckets['0–10'].push(i); else if(p.speed<20) buckets['10–20'].push(i); else if(p.speed<30) buckets['20–30'].push(i); else buckets['30+'].push(i); });
+  /* Graph 2: High-Speed Distribution */
+  const buckets={
+    '30–39 km/h':[],
+    '40–49 km/h':[],
+    '50–59 km/h':[],
+    '60+ km/h':[]
+  };
 
-  charts.push(new Chart(chart2,{type:'bar',data:{labels:Object.keys(buckets),datasets:[{label:'High-Speed Zones',data:Object.values(buckets).map(a=>a.length),backgroundColor:'#007bff'}]},options:{onClick:(e,el)=>{if(!el.length) return; showPointList(buckets[Object.keys(buckets)[el[0].index]]);}}}));
+  allData.forEach((p,i)=>{
+    if(p.speed>=30 && p.speed<40) buckets['30–39 km/h'].push(i);
+    else if(p.speed<50) buckets['40–49 km/h'].push(i);
+    else if(p.speed<60) buckets['50–59 km/h'].push(i);
+    else if(p.speed>=60) buckets['60+ km/h'].push(i);
+  });
 
-  let steady=[], aggressive=[], braking=[];
-  for(let i=1;i<allData.length;i++){ const d=allData[i].speed-allData[i-1].speed; if(Math.abs(d)<2) steady.push(i); else if(d>3) aggressive.push(i); else braking.push(i); }
+  charts.push(new Chart(chart2,{
+    type:'bar',
+    data:{
+      labels:Object.keys(buckets),
+      datasets:[{
+        label:'Number of GPS Points',
+        data:Object.values(buckets).map(v=>v.length),
+        backgroundColor:'#007bff'
+      }]
+    },
+    options:{
+      plugins:{title:{display:true,text:'High-Speed Driving Distribution (km/h)'}},
+      onClick:(e,el)=>el.length && showPointList(buckets[Object.keys(buckets)[el[0].index]])
+    }
+  }));
 
-  charts.push(new Chart(chart3,{type:currentChartType,data:{labels:['Steady','Aggressive Accel','Hard Braking'],datasets:[{data:[steady.length,aggressive.length,braking.length],backgroundColor:['#28a745','#ffc107','#dc3545']} ]},options:{onClick:(e,el)=>{if(!el.length) return; showPointList([steady,aggressive,braking][el[0].index]);}}}));
+  /* Graph 3: Driver Behaviour */
+  let steady=[], accel=[], brake=[];
+  for(let i=1;i<allData.length;i++){
+    const d=allData[i].speed-allData[i-1].speed;
+    if(Math.abs(d)<2) steady.push(i);
+    else if(d>3) accel.push(i);
+    else brake.push(i);
+  }
+
+  charts.push(new Chart(chart3,{
+    type:currentChartType,
+    data:{
+      labels:['Steady Driving','Aggressive Acceleration','Hard Braking'],
+      datasets:[{
+        label:'Driving Behaviour Events',
+        data:[steady.length,accel.length,brake.length],
+        backgroundColor:['#28a745','#ffc107','#dc3545']
+      }]
+    },
+    options:{
+      plugins:{title:{display:true,text:'Driver Behaviour Analysis'}},
+      onClick:(e,el)=>el.length && showPointList([steady,accel,brake][el[0].index])
+    }
+  }));
 }
 
+/* ---------- Point List ---------- */
 function showPointList(indexes){
-  const list=document.getElementById('pointList');
-  list.innerHTML='';
-  if(!indexes.length){ list.innerHTML='<i>No points</i>'; return; }
+  pointList.innerHTML='';
+  if(!indexes.length){ pointList.innerHTML='<i>No points</i>'; return; }
 
   indexes.forEach(i=>{
     const p=allData[i];
     const d=document.createElement('div');
     d.className='point-item';
-    d.innerHTML=`#${i} | ${p.date} ${p.time} | Speed: ${p.speed}`;
+    d.textContent=`#${i} | ${p.date} ${p.time} | Speed: ${p.speed} km/h`;
     d.onclick=()=>highlightPoint(i);
-    list.appendChild(d);
+    pointList.appendChild(d);
   });
 }
 
 function highlightPoint(i){
-  const m=markerMap[i]; if(!m) return;
+  const m=markerMap[i];
+  if(!m) return;
   map.setView(m.getLatLng(),18);
   m.setStyle({radius:9,color:'yellow',fillColor:'orange'});
-
   setTimeout(()=>{
     const p=allData[i];
-    const c=(p.speed<=threshold)?'green':'red';
+    const c=p.speed<=threshold?'green':'red';
     m.setStyle({radius:5,color:c,fillColor:c});
   },1500);
 }
